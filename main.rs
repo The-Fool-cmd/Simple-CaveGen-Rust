@@ -1,4 +1,5 @@
 use std::io;
+use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 
@@ -25,6 +26,9 @@ pub struct App {
 impl App {
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         while !self.exit {
+            if event::poll(Duration::from_millis(50))? {
+                self.handle_events()?;
+            }
             terminal.draw(|frame| self.draw(frame))?;
         }
         Ok(())
