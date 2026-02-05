@@ -5,28 +5,34 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 
 use ratatui::{
     DefaultTerminal, Frame,
+    layout::{Constraint, Direction, Layout},
     style::Stylize,
     symbols::border,
-    text::{Line, Text},
+    text::{Line, Span, Text},
     widgets::{Block, Paragraph},
 };
 
 // Constants used for grid sizes
-const GRID_W: u16 = 20;
-const GRID_H: u16 = 12;
+const WORLD_W: usize = 160;
+const WORLD_H: usize = 90;
 
 fn main() -> io::Result<()> {
     ratatui::run(|terminal| App::default().run(terminal))
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct App {
     size: (u16, u16),
-    cursor_x: u16,
-    cursor_y: u16,
+    cursor_x: usize,
+    cursor_y: usize,
     exit: bool,
+    grid: Grid,
+    cam_x: usize,
+    cam_y: usize,
+    view_w: usize,
+    view_h: usize,
 }
-
+#[derive(Debug)]
 struct Grid {
     w: usize,
     h: usize,
@@ -92,9 +98,10 @@ impl App {
         match code {
             KeyCode::Char('q') => self.exit(),
             KeyCode::Left => self.cursor_x = self.cursor_x.saturating_sub(1),
-            KeyCode::Right => self.cursor_x = (self.cursor_x + 1).min(GRID_W - 1),
+            KeyCode::Right => self.cursor_x = (self.cursor_x + 1).min(self.grid.w - 1),
             KeyCode::Up => self.cursor_y = self.cursor_y.saturating_sub(1),
-            KeyCode::Down => self.cursor_y = (self.cursor_y + 1).min(GRID_H - 1),
+            KeyCode::Down => self.cursor_y = (self.cursor_y + 1).min(self.grid.h - 1),
+            KeyCode::Char(' ') => self.grid.toggle(self.cursor_x, self.cursor_y),
             _ => {}
         }
     }
@@ -112,20 +119,76 @@ impl App {
             " Quit ".into(),
             "<Q>".blue().bold(),
         ]);
+
         let block = Block::bordered()
             .title(title.centered())
             .title_bottom(instructions.centered())
             .border_set(border::THICK);
 
-        let counter_text = Text::from(vec![Line::from(vec![
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(0)])
+            .split(area);
+
+        let debug_text = Text::from(vec![Line::from(vec![
             " Cursor Position: ".into(),
             self.cursor_x.to_string().yellow(),
             " ".into(),
             self.cursor_y.to_string().blue(),
         ])]);
 
-        let paragraph = Paragraph::new(counter_text).centered().block(block);
+        frame.render_widget(Paragraph::new(debug_text), chunks[0]);
 
-        frame.render_widget(paragraph, area);
+        let inner_w_chars = chunks[1].width.saturating_sub(2);
+        let inner_h_rows = chunks[1].height.saturating_sub(2);
+
+        let view_w = (inner_w_chars as usize).max(1);
+        let view_h = ((inner_h_rows as usize) / 2).max(1);
+
+        let start_x = self.cam_x;
+        let start_y = self.cam_y;
+
+        let end_x = (start_x + view_w).min(self.grid.w);
+        let end_y = (start_y + view_h).min(self.grid.h);
+
+        // Grid
+        let mut rows: Vec<Line> = Vec::with_capacity(end_y - start_y);
+        for y in start_y..end_y {
+            let mut spans: Vec<Span> = Vec::with_capacity(end_x - start_x);
+
+            for x in start_x..end_x {
+                let filled = self.grid.get(x, y).unwrap_or(false);
+                let cell = if filled { "██" } else { "  " };
+
+                let span = if x == self.cursor_x && y == self.cursor_y {
+                    Span::from(cell).reversed()
+                } else {
+                    Span::from(cell)
+                };
+
+                spans.push(span);
+            }
+            rows.push(Line::from(spans));
+        }
+        let grid_text = Text::from(rows);
+        let grid_paragraph = Paragraph::new(grid_text).block(block);
+
+        frame.render_widget(grid_paragraph, chunks[1]);
+    }
+}
+
+impl Default for App {
+    fn default() -> Self {
+        Self {
+            size: (0, 0),
+            cursor_x: 0,
+            cursor_y: 0,
+            exit: false,
+            grid: Grid::new(WORLD_W, WORLD_H),
+            cam_x: 0,
+            cam_y: 0,
+            view_w: 0,
+            view_h: 0,
+        }
     }
 }
