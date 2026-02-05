@@ -5,13 +5,15 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 
 use ratatui::{
     DefaultTerminal, Frame,
-    buffer::Buffer,
-    layout::Rect,
     style::Stylize,
     symbols::border,
     text::{Line, Text},
-    widgets::{Block, Paragraph, Widget},
+    widgets::{Block, Paragraph},
 };
+
+// Constants used for grid sizes
+const GRID_W: u16 = 20;
+const GRID_H: u16 = 12;
 
 fn main() -> io::Result<()> {
     ratatui::run(|terminal| App::default().run(terminal))
@@ -19,10 +21,47 @@ fn main() -> io::Result<()> {
 
 #[derive(Default, Debug)]
 pub struct App {
-    counter: u8,
+    size: (u16, u16),
+    cursor_x: u16,
+    cursor_y: u16,
     exit: bool,
 }
-// test commit
+
+struct Grid {
+    w: usize,
+    h: usize,
+    cells: Vec<bool>,
+}
+
+impl Grid {
+    fn new(w: usize, h: usize) -> Self {
+        Self {
+            w,
+            h,
+            cells: vec![false; w * h],
+        }
+    }
+
+    fn idx(&self, x: usize, y: usize) -> usize {
+        y * self.w + x
+    }
+
+    fn in_bounds(&self, x: usize, y: usize) -> bool {
+        x < self.w && y < self.h
+    }
+
+    fn get(&self, x: usize, y: usize) -> Option<bool> {
+        self.in_bounds(x, y).then(|| self.cells[self.idx(x, y)])
+    }
+
+    fn toggle(&mut self, x: usize, y: usize) {
+        if self.in_bounds(x, y) {
+            let i = self.idx(x, y);
+            self.cells[i] = !self.cells[i];
+        }
+    }
+}
+
 impl App {
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         while !self.exit {
@@ -35,24 +74,27 @@ impl App {
     }
 
     fn draw(&self, frame: &mut Frame) {
-        frame.render_widget(self, frame.area());
+        self.ui(frame);
     }
 
     fn handle_events(&mut self) -> io::Result<()> {
         match event::read()? {
             Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
-                self.handle_key_event(key_event)
+                self.handle_key_event(key_event.code)
             }
+            Event::Resize(width, height) => self.size = (width, height),
             _ => {}
         };
         Ok(())
     }
 
-    fn handle_key_event(&mut self, key_event: KeyEvent) {
-        match key_event.code {
+    fn handle_key_event(&mut self, code: KeyCode) {
+        match code {
             KeyCode::Char('q') => self.exit(),
-            KeyCode::Left => self.decrement_counter(),
-            KeyCode::Right => self.increment_counter(),
+            KeyCode::Left => self.cursor_x = self.cursor_x.saturating_sub(1),
+            KeyCode::Right => self.cursor_x = (self.cursor_x + 1).min(GRID_W - 1),
+            KeyCode::Up => self.cursor_y = self.cursor_y.saturating_sub(1),
+            KeyCode::Down => self.cursor_y = (self.cursor_y + 1).min(GRID_H - 1),
             _ => {}
         }
     }
@@ -61,23 +103,12 @@ impl App {
         self.exit = true;
     }
 
-    fn increment_counter(&mut self) {
-        self.counter += 1;
-    }
+    fn ui(&self, frame: &mut Frame) {
+        let area = frame.area();
 
-    fn decrement_counter(&mut self) {
-        self.counter -= 1;
-    }
-}
-
-impl Widget for &App {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        let title = Line::from(" Counter App Tutorial ".bold());
+        let title = Line::from(" Cave! ".bold());
         let instructions = Line::from(vec![
-            " Decrement ".into(),
-            "<Left>".blue().bold(),
-            " Increment ".into(),
-            "<Right>".blue().bold(),
+            " Move cursor using arrow keys  ".into(),
             " Quit ".into(),
             "<Q>".blue().bold(),
         ]);
@@ -87,13 +118,14 @@ impl Widget for &App {
             .border_set(border::THICK);
 
         let counter_text = Text::from(vec![Line::from(vec![
-            " Value: ".into(),
-            self.counter.to_string().yellow(),
+            " Cursor Position: ".into(),
+            self.cursor_x.to_string().yellow(),
+            " ".into(),
+            self.cursor_y.to_string().blue(),
         ])]);
 
-        Paragraph::new(counter_text)
-            .centered()
-            .block(block)
-            .render(area, buf);
+        let paragraph = Paragraph::new(counter_text).centered().block(block);
+
+        frame.render_widget(paragraph, area);
     }
 }
