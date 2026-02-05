@@ -1,7 +1,8 @@
 use std::io;
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::terminal;
 
 use ratatui::{
     DefaultTerminal, Frame,
@@ -31,6 +32,7 @@ pub struct App {
     cam_y: usize,
     view_w: usize,
     view_h: usize,
+    seed: u64,
 }
 #[derive(Debug)]
 struct Grid {
@@ -66,10 +68,28 @@ impl Grid {
             self.cells[i] = !self.cells[i];
         }
     }
+
+    fn set(&mut self, x: usize, y: usize, v: bool) {
+        if self.in_bounds(x, y) {
+            let i = self.idx(x, y);
+            self.cells[i] = v;
+        }
+    }
+
+    fn fill(&mut self, v: bool) {
+        self.cells.fill(v);
+    }
+
+    fn clear(&mut self) {
+        self.fill(false);
+    }
 }
 
 impl App {
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
+        let (w, h) = terminal::size()?;
+        self.size = (w, h);
+        self.update_viewport_from_terminal(w, h);
         while !self.exit {
             if event::poll(Duration::from_millis(50))? {
                 self.handle_events()?;
@@ -88,21 +108,42 @@ impl App {
             Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
                 self.handle_key_event(key_event.code)
             }
-            Event::Resize(width, height) => self.size = (width, height),
+            Event::Resize(width, height) => {
+                self.size = (width, height);
+                self.update_viewport_from_terminal(width, height);
+            }
             _ => {}
         };
         Ok(())
     }
 
     fn handle_key_event(&mut self, code: KeyCode) {
+        let mut moved = false;
+
         match code {
             KeyCode::Char('q') => self.exit(),
-            KeyCode::Left => self.cursor_x = self.cursor_x.saturating_sub(1),
-            KeyCode::Right => self.cursor_x = (self.cursor_x + 1).min(self.grid.w - 1),
-            KeyCode::Up => self.cursor_y = self.cursor_y.saturating_sub(1),
-            KeyCode::Down => self.cursor_y = (self.cursor_y + 1).min(self.grid.h - 1),
+            KeyCode::Left => {
+                self.cursor_x = self.cursor_x.saturating_sub(1);
+                moved = true
+            }
+            KeyCode::Right => {
+                self.cursor_x = (self.cursor_x + 1).min(self.grid.w - 1);
+                moved = true
+            }
+            KeyCode::Up => {
+                self.cursor_y = self.cursor_y.saturating_sub(1);
+                moved = true
+            }
+            KeyCode::Down => {
+                self.cursor_y = (self.cursor_y + 1).min(self.grid.h - 1);
+                moved = true
+            }
             KeyCode::Char(' ') => self.grid.toggle(self.cursor_x, self.cursor_y),
+            KeyCode::Char('c') => self.grid.clear(),
             _ => {}
+        }
+        if moved {
+            self.follow_cursor();
         }
     }
 
@@ -139,17 +180,10 @@ impl App {
 
         frame.render_widget(Paragraph::new(debug_text), chunks[0]);
 
-        let inner_w_chars = chunks[1].width.saturating_sub(2);
-        let inner_h_rows = chunks[1].height.saturating_sub(2);
-
-        let view_w = (inner_w_chars as usize).max(1);
-        let view_h = ((inner_h_rows as usize) / 2).max(1);
-
         let start_x = self.cam_x;
         let start_y = self.cam_y;
-
-        let end_x = (start_x + view_w).min(self.grid.w);
-        let end_y = (start_y + view_h).min(self.grid.h);
+        let end_x = (start_x + self.view_w).min(self.grid.w);
+        let end_y = (start_y + self.view_h).min(self.grid.h);
 
         // Grid
         let mut rows: Vec<Line> = Vec::with_capacity(end_y - start_y);
@@ -174,6 +208,53 @@ impl App {
         let grid_paragraph = Paragraph::new(grid_text).block(block);
 
         frame.render_widget(grid_paragraph, chunks[1]);
+    }
+
+    fn update_viewport_from_terminal(&mut self, term_w: u16, term_h: u16) {
+        // 1 line debug, 2 lines block border
+        let usable_h = term_h.saturating_sub(1).saturating_sub(2) as usize;
+
+        let usable_w = term_w.saturating_sub(2) as usize;
+        let view_w = (usable_w / 2).max(1);
+        let view_h = usable_h.max(1);
+
+        self.view_w = view_w.min(self.grid.w);
+        self.view_h = view_h.min(self.grid.h);
+
+        self.follow_cursor();
+    }
+
+    fn follow_cursor(&mut self) {
+        // if viewport not initialized, leave
+        if self.view_w == 0 || self.view_h == 0 {
+            return;
+        }
+        // X: keep cursor within [cam_x, cam_x + view_w - 1]
+        if self.cursor_x < self.cam_x {
+            self.cam_x = self.cursor_x;
+        } else if self.cursor_x >= self.cam_x + self.view_w {
+            self.cam_x = self.cursor_x + 1 - self.view_w;
+        }
+
+        // Y
+        if self.cursor_y < self.cam_y {
+            self.cam_y = self.cursor_y;
+        } else if self.cursor_y >= self.cam_y + self.view_h {
+            self.cam_y = self.cursor_y + 1 - self.view_h;
+        }
+
+        // Clamp camera so viewport stays inside world
+        if self.grid.w <= self.view_w {
+            self.cam_x = 0;
+        } else {
+            self.cam_x = self.cam_x.min(self.grid.w - self.view_w);
+        }
+
+        if self.grid.h <= self.view_h {
+            self.cam_y = 0;
+        } else {
+            self.cam_y = self.cam_y.min(self.grid.h - self.view_h);
+        }
     }
 }
 
