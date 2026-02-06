@@ -17,8 +17,8 @@ use ratatui::{
 };
 
 // Constants used for grid sizes
-const WORLD_W: usize = 90;
-const WORLD_H: usize = 40;
+const WORLD_W: usize = 80;
+const WORLD_H: usize = 42;
 // Tick duration in ms
 const TICK: Duration = Duration::from_millis(10);
 // Constants used for the layout
@@ -154,13 +154,9 @@ impl App {
                 self.step_active();
                 self.last_tick = Instant::now();
             }
-            terminal.draw(|frame| self.draw(frame))?;
+            terminal.draw(|frame| self.ui(frame))?;
         }
         Ok(())
-    }
-
-    fn draw(&mut self, frame: &mut Frame) {
-        self.ui(frame);
     }
 
     fn handle_events(&mut self) -> io::Result<()> {
@@ -180,7 +176,7 @@ impl App {
         let mut moved = false;
 
         match code {
-            KeyCode::Char('q') => self.exit(),
+            KeyCode::Char('q') => self.exit = true,
             KeyCode::Left => {
                 self.cursor_x = self.cursor_x.saturating_sub(1);
                 moved = true
@@ -220,10 +216,6 @@ impl App {
         }
     }
 
-    fn exit(&mut self) {
-        self.exit = true;
-    }
-
     fn ui(&mut self, frame: &mut Frame) {
         let area = frame.area();
 
@@ -256,20 +248,20 @@ impl App {
         self.follow_cursor();
 
         let debug_text = Text::from(vec![Line::from(vec![
-            " Cursor Position: ".into(),
-            self.cursor_x.to_string().yellow(),
-            " ".into(),
-            self.cursor_y.to_string().blue(),
-            " Seed ".into(),
-            self.seed.to_string().red(),
-            " Algo: ".into(),
+            " Cursor Position ".red().into(),
+            format!("x: {} y: {}", self.cursor_x, self.cursor_y).into(),
+            " Seed ".red().into(),
+            self.seed.to_string().into(),
+            " Algo: ".red().into(),
             format!("{:?}", self.algo).into(),
-            " Inner ".into(),
+            " Inner ".red().into(),
             format!("{}x{}", inner.width, inner.height).into(),
-            " View ".into(),
+            " View ".red().into(),
             format!("{}x{}", self.view_w, self.view_h).into(),
-            " World ".into(),
+            " World ".red().into(),
             format!("{}x{}", self.grid.w, self.grid.h).into(),
+            " Running ".red().into(),
+            self.running.to_string().into(),
         ])]);
 
         frame.render_widget(
