@@ -1,9 +1,12 @@
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::terminal;
 
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
+use ratatui::widgets::Wrap;
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Direction, Layout},
@@ -14,11 +17,19 @@ use ratatui::{
 };
 
 // Constants used for grid sizes
-const WORLD_W: usize = 160;
-const WORLD_H: usize = 90;
-
+const WORLD_W: usize = 90;
+const WORLD_H: usize = 40;
+// Tick duration in ms
+const TICK: Duration = Duration::from_millis(10);
+// Constants used for the layout
+const DEBUG_COLS: u16 = 30;
 fn main() -> io::Result<()> {
     ratatui::run(|terminal| App::default().run(terminal))
+}
+#[derive(Debug)]
+enum Algorithm {
+    Paint,
+    Life,
 }
 
 #[derive(Debug)]
@@ -33,12 +44,16 @@ pub struct App {
     view_w: usize,
     view_h: usize,
     seed: u64,
+    algo: Algorithm,
+    running: bool,
+    last_tick: Instant,
 }
 #[derive(Debug)]
 struct Grid {
     w: usize,
     h: usize,
     cells: Vec<bool>,
+    next: Vec<bool>,
 }
 
 impl Grid {
@@ -47,6 +62,7 @@ impl Grid {
             w,
             h,
             cells: vec![false; w * h],
+            next: vec![false; w * h],
         }
     }
 
@@ -83,23 +99,67 @@ impl Grid {
     fn clear(&mut self) {
         self.fill(false);
     }
+
+    fn step_life(&mut self) {
+        for y in 0..self.h {
+            for x in 0..self.w {
+                let i = self.idx(x, y);
+                let alive = self.cells[i];
+
+                let mut n: u8 = 0;
+
+                for dy in -1isize..=1 {
+                    for dx in -1isize..=1 {
+                        if dx == 0 && dy == 0 {
+                            continue;
+                        }
+
+                        let nx = x as isize + dx;
+                        let ny = y as isize + dy;
+
+                        if nx < 0 || ny < 0 {
+                            continue;
+                        }
+
+                        let nx = nx as usize;
+                        let ny = ny as usize;
+
+                        if nx >= self.w || ny >= self.h {
+                            continue;
+                        }
+
+                        if self.cells[self.idx(nx, ny)] {
+                            n += 1;
+                        }
+                    }
+                }
+
+                self.next[i] = if alive { n == 2 || n == 3 } else { n == 3 };
+            }
+        }
+
+        std::mem::swap(&mut self.cells, &mut self.next);
+    }
 }
 
 impl App {
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         let (w, h) = terminal::size()?;
         self.size = (w, h);
-        self.update_viewport_from_terminal(w, h);
         while !self.exit {
             if event::poll(Duration::from_millis(50))? {
                 self.handle_events()?;
+            }
+            if self.running && self.last_tick.elapsed() >= TICK {
+                self.step_active();
+                self.last_tick = Instant::now();
             }
             terminal.draw(|frame| self.draw(frame))?;
         }
         Ok(())
     }
 
-    fn draw(&self, frame: &mut Frame) {
+    fn draw(&mut self, frame: &mut Frame) {
         self.ui(frame);
     }
 
@@ -110,7 +170,6 @@ impl App {
             }
             Event::Resize(width, height) => {
                 self.size = (width, height);
-                self.update_viewport_from_terminal(width, height);
             }
             _ => {}
         };
@@ -140,6 +199,20 @@ impl App {
             }
             KeyCode::Char(' ') => self.grid.toggle(self.cursor_x, self.cursor_y),
             KeyCode::Char('c') => self.grid.clear(),
+            KeyCode::Char('r') => self.regen_random(0.45),
+            KeyCode::Char('n') => {
+                self.seed += 1;
+                self.regen_random(0.45);
+            }
+            KeyCode::Char('p') => {
+                self.running = !self.running;
+                self.last_tick = Instant::now();
+            }
+            KeyCode::Char('s') => {
+                self.step_active();
+            }
+            KeyCode::Char('1') => self.algo = Algorithm::Paint,
+            KeyCode::Char('2') => self.algo = Algorithm::Life,
             _ => {}
         }
         if moved {
@@ -151,12 +224,15 @@ impl App {
         self.exit = true;
     }
 
-    fn ui(&self, frame: &mut Frame) {
+    fn ui(&mut self, frame: &mut Frame) {
         let area = frame.area();
 
         let title = Line::from(" Cave! ".bold());
         let instructions = Line::from(vec![
-            " Move cursor using arrow keys  ".into(),
+            " Paint ".into(),
+            "<1>".into(),
+            " Life ".into(),
+            "<2>".into(),
             " Quit ".into(),
             "<Q>".blue().bold(),
         ]);
@@ -167,18 +243,39 @@ impl App {
             .border_set(border::THICK);
 
         let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Min(0)])
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(DEBUG_COLS), Constraint::Min(0)])
             .split(area);
+
+        let grid_area = chunks[1];
+        let inner = block.inner(grid_area);
+
+        self.view_w = ((inner.width as usize) / 2).max(1).min(self.grid.w);
+        self.view_h = (inner.height as usize).max(1).min(self.grid.h);
+
+        self.follow_cursor();
 
         let debug_text = Text::from(vec![Line::from(vec![
             " Cursor Position: ".into(),
             self.cursor_x.to_string().yellow(),
             " ".into(),
             self.cursor_y.to_string().blue(),
+            " Seed ".into(),
+            self.seed.to_string().red(),
+            " Algo: ".into(),
+            format!("{:?}", self.algo).into(),
+            " Inner ".into(),
+            format!("{}x{}", inner.width, inner.height).into(),
+            " View ".into(),
+            format!("{}x{}", self.view_w, self.view_h).into(),
+            " World ".into(),
+            format!("{}x{}", self.grid.w, self.grid.h).into(),
         ])]);
 
-        frame.render_widget(Paragraph::new(debug_text), chunks[0]);
+        frame.render_widget(
+            Paragraph::new(debug_text).wrap(Wrap { trim: true }),
+            chunks[0],
+        );
 
         let start_x = self.cam_x;
         let start_y = self.cam_y;
@@ -210,18 +307,13 @@ impl App {
         frame.render_widget(grid_paragraph, chunks[1]);
     }
 
-    fn update_viewport_from_terminal(&mut self, term_w: u16, term_h: u16) {
-        // 1 line debug, 2 lines block border
-        let usable_h = term_h.saturating_sub(1).saturating_sub(2) as usize;
-
-        let usable_w = term_w.saturating_sub(2) as usize;
-        let view_w = (usable_w / 2).max(1);
-        let view_h = usable_h.max(1);
-
-        self.view_w = view_w.min(self.grid.w);
-        self.view_h = view_h.min(self.grid.h);
-
-        self.follow_cursor();
+    fn step_active(&mut self) {
+        match self.algo {
+            Algorithm::Paint => {}
+            Algorithm::Life => {
+                self.grid.step_life();
+            }
+        }
     }
 
     fn follow_cursor(&mut self) {
@@ -256,6 +348,23 @@ impl App {
             self.cam_y = self.cam_y.min(self.grid.h - self.view_h);
         }
     }
+
+    fn regen_random(&mut self, p: f64) {
+        // clear grid before generation
+        self.grid.clear();
+
+        let mut rng = StdRng::seed_from_u64(self.seed);
+
+        for y in 0..self.grid.h {
+            for x in 0..self.grid.w {
+                let border = x == 0 || y == 0 || x == self.grid.w - 1 || y == self.grid.h - 1;
+
+                let wall = if border { true } else { rng.random_bool(p) };
+
+                self.grid.set(x, y, wall);
+            }
+        }
+    }
 }
 
 impl Default for App {
@@ -268,8 +377,12 @@ impl Default for App {
             grid: Grid::new(WORLD_W, WORLD_H),
             cam_x: 0,
             cam_y: 0,
-            view_w: 0,
-            view_h: 0,
+            view_w: 1,
+            view_h: 1,
+            seed: 1,
+            algo: Algorithm::Paint,
+            last_tick: Instant::now(),
+            running: false,
         }
     }
 }
