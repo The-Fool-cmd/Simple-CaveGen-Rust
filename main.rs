@@ -20,7 +20,7 @@ use ratatui::{
 const WORLD_W: usize = 80;
 const WORLD_H: usize = 42;
 // Tick duration in ms
-const TICK: Duration = Duration::from_millis(10);
+const TICK: Duration = Duration::from_millis(50);
 // Constants used for the layout
 const DEBUG_COLS: u16 = 30;
 fn main() -> io::Result<()> {
@@ -30,6 +30,7 @@ fn main() -> io::Result<()> {
 enum Algorithm {
     Paint,
     Life,
+    DrunkWalk,
 }
 
 #[derive(Debug)]
@@ -208,7 +209,17 @@ impl App {
                 self.step_active();
             }
             KeyCode::Char('1') => self.algo = Algorithm::Paint,
-            KeyCode::Char('2') => self.algo = Algorithm::Life,
+            KeyCode::Char('2') => {
+                self.algo = Algorithm::Life;
+                self.running = false;
+                self.last_tick = Instant::now();
+            }
+            KeyCode::Char('3') => {
+                self.algo = Algorithm::DrunkWalk;
+                self.running = false;
+                self.last_tick = Instant::now();
+            }
+
             _ => {}
         }
         if moved {
@@ -305,6 +316,12 @@ impl App {
             Algorithm::Life => {
                 self.grid.step_life();
             }
+            Algorithm::DrunkWalk => {
+                self.gen_drunk_walk(0.5);
+                self.cursor_x = self.grid.w / 2;
+                self.cursor_y = self.grid.h / 2;
+                self.follow_cursor();
+            }
         }
     }
 
@@ -354,6 +371,54 @@ impl App {
                 let wall = if border { true } else { rng.random_bool(p) };
 
                 self.grid.set(x, y, wall);
+            }
+        }
+    }
+    fn gen_drunk_walk(&mut self, carve_target_ratio: f64) {
+        // start as solid walls
+        self.grid.fill(true);
+
+        // seeded rng
+        let mut rng = StdRng::seed_from_u64(self.seed);
+
+        // start in the center
+        let mut x = self.grid.w / 2;
+        let mut y = self.grid.h / 2;
+
+        // keep a 1-cell border as walls to avoid open edges
+        x = x.clamp(1, self.grid.w.saturating_sub(2));
+        y = y.clamp(1, self.grid.h.saturating_sub(2));
+
+        // decide how much to carve
+        let total = self.grid.w * self.grid.h;
+        let target_open = ((total as f64) * carve_target_ratio).round() as usize;
+
+        // carve until we hit target
+        let mut opened = 0usize;
+
+        // carve starting cell
+        if self.grid.get(x, y) == Some(true) {
+            self.grid.set(x, y, false);
+            opened += 1;
+        }
+
+        while opened < target_open {
+            // choose direction 0..4
+            match rng.random_range(0..4) {
+                0 => x = x.saturating_sub(1),
+                1 => x = (x + 1).min(self.grid.w - 1),
+                2 => y = y.saturating_sub(1),
+                _ => y = (y + 1).min(self.grid.h - 1),
+            }
+
+            // enforce border walls
+            x = x.clamp(1, self.grid.w.saturating_sub(2));
+            y = y.clamp(1, self.grid.h.saturating_sub(2));
+
+            // carve if still wall
+            if self.grid.get(x, y) == Some(true) {
+                self.grid.set(x, y, false);
+                opened += 1;
             }
         }
     }
