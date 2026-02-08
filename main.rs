@@ -23,6 +23,11 @@ const WORLD_H: usize = 42;
 const TICK: Duration = Duration::from_millis(50);
 // Constants used for the layout
 const DEBUG_COLS: u16 = 30;
+// Constant used for DrunkWalk Gen
+const DRUNKCHANCE: f64 = 0.4;
+// Constant used for Random Gen
+const RANDCHANCE: f64 = 0.45;
+
 fn main() -> io::Result<()> {
     ratatui::run(|terminal| App::default().run(terminal))
 }
@@ -196,10 +201,10 @@ impl App {
             }
             KeyCode::Char(' ') => self.grid.toggle(self.cursor_x, self.cursor_y),
             KeyCode::Char('c') => self.grid.clear(),
-            KeyCode::Char('r') => self.regen_random(0.45),
+            KeyCode::Char('r') => self.regen_random(RANDCHANCE),
             KeyCode::Char('n') => {
                 self.seed += 1;
-                self.regen_random(0.45);
+                self.regen_random(RANDCHANCE);
             }
             KeyCode::Char('p') => {
                 self.running = !self.running;
@@ -317,7 +322,10 @@ impl App {
                 self.grid.step_life();
             }
             Algorithm::DrunkWalk => {
-                self.gen_drunk_walk(0.5);
+                // Increment seed to chance cave every step
+                self.seed += 1;
+                self.gen_drunk_walk(DRUNKCHANCE);
+                // Move to the center of the grid
                 self.cursor_x = self.grid.w / 2;
                 self.cursor_y = self.grid.h / 2;
                 self.follow_cursor();
