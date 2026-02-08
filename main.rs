@@ -241,6 +241,8 @@ impl App {
             "<1>".into(),
             " Life ".into(),
             "<2>".into(),
+            " DrunkWalk ".into(),
+            "<3>".into(),
             " Quit ".into(),
             "<Q>".blue().bold(),
         ]);
@@ -325,9 +327,9 @@ impl App {
                 // Increment seed to chance cave every step
                 self.seed += 1;
                 self.gen_drunk_walk(DRUNKCHANCE);
-                // Move to the center of the grid
-                self.cursor_x = self.grid.w / 2;
-                self.cursor_y = self.grid.h / 2;
+                // Move viewport to the center of the grid
+                self.cursor_x = self.grid.w / 2 + self.view_w / 2;
+                self.cursor_y = self.grid.h / 2 + self.view_h / 2;
                 self.follow_cursor();
             }
         }
